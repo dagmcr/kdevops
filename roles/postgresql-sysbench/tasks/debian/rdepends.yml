@@ -1,0 +1,7 @@
+- name: Provisioning Runtime Dependencies
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.apt:
+    name: "{{ postgresql_sysbench_rdepends }}"
+    update_cache: yes

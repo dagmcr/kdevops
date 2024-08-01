@@ -1,0 +1,4 @@
+[localvm]
+localvm
+[localvm:vars]
+ansible_ssh_common_args='-F inventory/localvm.config'

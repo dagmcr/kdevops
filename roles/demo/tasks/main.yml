@@ -1,0 +1,24 @@
+---
+- name: Ping Hosts
+  ansible.builtin.ping:
+
+- name: Print Hello World Message
+  ansible.builtin.debug:
+   msg: Hello world
+
+- name: Print os_family Ansible Variable
+  ansible.builtin.debug:
+    var: ansible_facts['os_family']
+
+- name: Display All Variables and Facts Known
+  ansible.builtin.debug:
+    var: hostvars[inventory_hostname]
+    verbosity: 4
+
+- name: Distro Tasks
+  import_tasks: distro/main.yml
+  when: ansible_facts['os_family'] | lower in ['debian', 'suse', 'redhat']
+
+- name: Print the Shell Type Using Ansible Environment
+  ansible.builtin.debug:
+    msg: "The current shell is: {{ ansible_env.SHELL }}"

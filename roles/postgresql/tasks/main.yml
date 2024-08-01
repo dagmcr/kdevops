@@ -1,0 +1,55 @@
+---
+- name: bdepends
+  import_tasks: debian/bdepends.yml
+  when: ansible_facts['os_family']|lower == 'debian'
+
+- name: Fetch Sources
+  ansible.builtin.git:
+    dest: "{{ postgresql_src }}"
+    repo: "{{ postgresql_repo }}"
+    update: yes
+    version: "{{ postgresql_version }}"
+  delay: 5
+  register: result
+  retries: 3
+  until: not result.failed
+
+- name: Get Number of Processing Units Available
+  ansible.builtin.command: nproc --all
+  register: punits
+
+- name: Check if Clean is Required
+  stat:
+    path: "{{ postgresql_src }}/GNUmakefile"
+  register: postgresql_cleanup
+
+- name: Clean
+  ansible.builtin.command:
+    cmd: |
+      make clean
+      make distclean
+  args:
+    chdir: "{{ postgresql_src }}"
+  when:
+    - postgresql_cleanup.stat.exists|bool
+
+- name: Configure
+  ansible.builtin.command:
+    cmd: >
+      ./configure
+      --with-blocksize={{ postgresql_blocksize }}
+      --with-wal-blocksize={{ postgresql_wal_blocksize }}
+  args:
+    chdir: "{{ postgresql_src }}"
+
+- name: Build
+  ansible.builtin.make:
+    jobs: "{{ punits.stdout }}"
+  args:
+    chdir: "{{ postgresql_src }}"
+
+- name: Install
+  ansible.builtin.make:
+    target: install
+  args:
+    chdir: "{{ postgresql_src }}"

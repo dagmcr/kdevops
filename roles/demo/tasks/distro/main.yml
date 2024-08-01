@@ -1,0 +1,16 @@
+---
+- name: Get Contents of /etc/os-release
+  command: cat /etc/os-release
+  register: os_release_output
+
+- name: Print /etc/os-release
+  ansible.builtin.debug:
+    msg: "{{ os_release_output.stdout }}"
+
+- name: Get System Information
+  command: /usr/bin/uname --all
+  register: uname_all
+
+- name: Print System Information
+  ansible.builtin.debug:
+    msg: "{{ uname_all.stdout }}"
