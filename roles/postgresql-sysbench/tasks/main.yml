@@ -7,6 +7,50 @@
   ansible.builtin.user:
     name: "{{ postgresql_sysbench_user }}"
 
+- name: Ensure the Logs Directory Exists
+  become: yes
+  become_method: sudo
+  file:
+    path: "{{ postgresql_sysbench_logdir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Check Log Directory is Mounted
+  become: yes
+  become_method: sudo
+  ansible.builtin.shell: |
+    mount | grep --quiet {{ postgresql_sysbench_logdir }}
+  register: _postgresql_sysbench_logdir_is_mounted
+  ignore_errors: true
+
+- name: Unmount the Log Directory if Mounted
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    umount --force {{ postgresql_sysbench_logdir }}
+  when: _postgresql_sysbench_logdir_is_mounted.rc == 0
+
+- name: Mount tmpfs on Log Directory
+  become: yes
+  become_method: sudo
+  mount:
+    path: "{{ postgresql_sysbench_logdir }}"
+    src: tmpfs
+    fstype: tmpfs
+    opts: size=1G
+    state: ephemeral
+
+- name: Change Ownership of Log Directory
+  become: yes
+  become_method: sudo
+  ansible.builtin.file:
+    path: "{{ postgresql_sysbench_logdir }}"
+    owner: "{{ postgresql_sysbench_user }}"
+    group: "{{ postgresql_sysbench_user }}"
+    recurse: yes
+
 - name: Check if PostgreSQL Server is Running
   become: yes
   become_user: "{{ postgresql_sysbench_user }}"
@@ -30,15 +74,15 @@
   become_method: sudo
   ansible.builtin.shell: |
     mount | grep --quiet {{ postgresql_sysbench_device }}
-  register: _postgresql_sysbench_is_mounted
+  register: _postgresql_sysbench_dut_is_mounted
   ignore_errors: true
 
 - name: Unmount the Device {{ postgresql_sysbench_device }}
   become: yes
   become_method: sudo
   ansible.builtin.command: >
-    umount {{ postgresql_sysbench_device }}
-  when: _postgresql_sysbench_is_mounted.rc == 0
+    umount --force {{ postgresql_sysbench_device }}
+  when: _postgresql_sysbench_dut_is_mounted.rc == 0
 
 - name: Create Mount Directory for PostgreSQL Service
   become: yes
@@ -60,13 +104,35 @@
     -f
   when: postgresql_sysbench_filesystem == 'xfs'
 
+- name: Format Device ({{ postgresql_sysbench_device }}) with EXT4 Filesystem
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    mkfs.ext4
+    -b {{ postgresql_sysbench_ext4_blocksize }}
+    {{ postgresql_sysbench_device }}
+    -F
+  when: postgresql_sysbench_filesystem == 'ext4'
+
+- name: Format Device ({{ postgresql_sysbench_device }}) with EXT4 Filesystem and Bigalloc
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    mkfs.ext4
+    -b {{ postgresql_sysbench_ext4ba_blocksize }}
+    -C {{ postgresql_sysbench_ext4ba_clustersize }}
+    -O bigalloc
+    {{ postgresql_sysbench_device }}
+    -F
+  when: postgresql_sysbench_filesystem == 'ext4ba'
+
 - name: Mount the Device {{ postgresql_sysbench_device }} at {{ postgresql_sysbench_mount }}
   become: yes
   become_method: sudo
   ansible.builtin.mount:
     path: "{{ postgresql_sysbench_mount }}"
     src: "{{ postgresql_sysbench_device }}"
-    fstype: "{{ postgresql_sysbench_filesystem }}"
+    fstype: "{{ postgresql_sysbench_filesystem | regex_replace('ba$', '') }}"
     state: ephemeral
 
 - name: Change Ownership of Mount Directory {{ postgresql_sysbench_mount }} to {{ postgresql_sysbench_user }}
@@ -101,7 +167,7 @@
   ansible.builtin.command: >
     /usr/local/pgsql/bin/pg_ctl
     --pgdata={{ postgresql_sysbench_pgdata }}
-    --log={{ postgresql_sysbench_log }}
+    --log={{ postgresql_sysbench_pgctl_log }}
     start
 
 - name: Create PostgreSQL Database USER
@@ -195,7 +261,6 @@
   become_user: root
   ansible.builtin.shell: |
     nohup blkalgn \
-    --trace \
     --disk {{ postgresql_sysbench_disk }} \
     --ops Write \
     --json-output {{ postgresql_sysbench_blkalgn_json }} \
@@ -235,6 +300,51 @@
   ansible.builtin.copy:
     content: "{{ postgresql_sysbench_run_output.stdout }}"
     dest: "{{ postgresql_sysbench_run_log }}"
+
+- name: Collect PostgreSQL Database Cluster Control Information
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/pg_controldata
+    --pgdata={{ postgresql_sysbench_pgdata }}
+  register: postgresql_sysbench_controldata_output
+
+- name: Write PostgreSQL Database Cluster Control Information to Log File
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.copy:
+    content: "{{ postgresql_sysbench_controldata_output.stdout }}"
+    dest: "{{ postgresql_sysbench_controldata_log }}"
+    mode: '0755'
+    owner: "{{ postgresql_sysbench_user }}"
+    group: "{{ postgresql_sysbench_user }}"
+    remote_src: yes
+
+- name: Stop the PostgreSQL Server
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/pg_ctl
+    --pgdata={{ postgresql_sysbench_pgdata }}
+    --log={{ postgresql_sysbench_pgctl_log }}
+    stop
+
+- name: Check if Device {{ postgresql_sysbench_device }} is Mounted
+  become: yes
+  become_method: sudo
+  ansible.builtin.shell: |
+    mount | grep --quiet {{ postgresql_sysbench_device }}
+  register: _postgresql_sysbench_dut_is_mounted
+  ignore_errors: true
+
+- name: Unmount the Device {{ postgresql_sysbench_device }}
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    umount --force {{ postgresql_sysbench_device }}
+  when: _postgresql_sysbench_dut_is_mounted.rc == 0
 
 - name: Gracefully Shutdown the blkalgn Process
   become: yes
@@ -288,21 +398,12 @@
     flat: yes
   when: postgresql_sysbench_blkalgn_enabled|bool
 
-- name: Stop the PostgreSQL Server
-  become: yes
-  become_user: "{{ postgresql_sysbench_user }}"
-  ansible.builtin.command: >
-    /usr/local/pgsql/bin/pg_ctl
-    --pgdata={{ postgresql_sysbench_pgdata }}
-    --log={{ postgresql_sysbench_log }}
-    stop
-
 - name: Fetch PostgreSQL Service Log File
   become: yes
   become_user: "{{ postgresql_sysbench_user }}"
   ansible.builtin.fetch:
-    src: "{{ postgresql_sysbench_log }}"
-    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_log_filename }}"
+    src: "{{ postgresql_sysbench_pgctl_log }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_pgctl_log_filename }}"
     flat: yes
 
 - name: Collect NVMe Namespace Logs
@@ -372,7 +473,7 @@
   when: postgresql_sysbench_filesystem == 'xfs'
   register: postgresql_sysbench_xfs_info_output
 
-- name: Write XFS filesystem Geometry Information Output of Device ({{ postgresql_sysbench_device }}) to Log File {{ postgresql_sysbench_xfs_info_log }}
+- name: Write XFS filesystem Geometry Information Output of Device ({{ postgresql_sysbench_device }}) to Log File
   become: yes
   become_method: sudo
   become_user: root
@@ -383,6 +484,7 @@
     owner: "{{ postgresql_sysbench_user }}"
     group: "{{ postgresql_sysbench_user }}"
     remote_src: yes
+  when: postgresql_sysbench_filesystem == 'xfs'
 
 - name: Fetch XFS info Log File
   become: yes
@@ -392,27 +494,39 @@
     src: "{{ postgresql_sysbench_xfs_info_log }}"
     dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_xfs_info_log_filename }}"
     flat: yes
+  when: postgresql_sysbench_filesystem == 'xfs'
 
-- name: Collect PostgreSQL Database Cluster Control Information
+- name: Collect EXT4 Filesystem Geometry Information of Device ({{ postgresql_sysbench_device }})
   become: yes
   become_method: sudo
-  become_user: "{{ postgresql_sysbench_user }}"
+  become_user: root
   ansible.builtin.command: >
-    /usr/local/pgsql/bin/pg_controldata
-    --pgdata={{ postgresql_sysbench_pgdata }}
-  register: postgresql_sysbench_controldata_output
+    tune2fs -l {{ postgresql_sysbench_device }}
+  when: postgresql_sysbench_filesystem in ['ext4', 'ext4ba']
+  register: postgresql_sysbench_ext4_info_output
 
-- name: Write PostgreSQL Database Cluster Control Information to Log File
+- name: Write EXT4 filesystem Geometry Information Output of Device ({{ postgresql_sysbench_device }}) to Log File
   become: yes
   become_method: sudo
   become_user: root
   ansible.builtin.copy:
-    content: "{{ postgresql_sysbench_controldata_output.stdout }}"
-    dest: "{{ postgresql_sysbench_controldata_log }}"
+    content: "{{ postgresql_sysbench_ext4_info_output.stdout }}"
+    dest: "{{ postgresql_sysbench_ext4_info_log }}"
     mode: '0755'
     owner: "{{ postgresql_sysbench_user }}"
     group: "{{ postgresql_sysbench_user }}"
     remote_src: yes
+  when: postgresql_sysbench_filesystem in ['ext4', 'ext4ba']
+
+- name: Fetch EXT4 info Log File
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.fetch:
+    src: "{{ postgresql_sysbench_ext4_info_log }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_ext4_info_log_filename }}"
+    flat: yes
+  when: postgresql_sysbench_filesystem in ['ext4', 'ext4ba']
 
 - name: Fetch PostgreSQL Database Cluster Control Information Log File
   become: yes
@@ -422,3 +536,18 @@
     src: "{{ postgresql_sysbench_controldata_log }}"
     dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_controldata_log_filename }}"
     flat: yes
+
+- name: Check Log Directory is Mounted
+  become: yes
+  become_method: sudo
+  ansible.builtin.shell: |
+    mount | grep --quiet {{ postgresql_sysbench_logdir }}
+  register: _postgresql_sysbench_logdir_is_mounted
+  ignore_errors: true
+
+- name: Unmount the Log Directory if Mounted
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    umount --force {{ postgresql_sysbench_logdir }}
+  when: _postgresql_sysbench_logdir_is_mounted.rc == 0
