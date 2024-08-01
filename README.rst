@@ -40,12 +40,8 @@ The project is organized as follows:
     │           └── ...
     └── scripts
         └── genvars.sh
-    
-    23 directories, 24 files
 
-- **inventory/**: Contains inventory files for different environments (e.g., production, staging).
-- **playbook.yml**: The main playbook that includes and runs the roles.
-- **roles/**: Directory containing in-tree roles that perform specific tasks.
+    23 directories, 24 files
 
 Getting Started
 ===============
