@@ -1,0 +1,13 @@
+---
+# Build Dependencies
+blkalgn_bdepends:
+  - python-is-python3
+  - python3-bpfcc
+
+# Fetch
+blkalgn_repo: https://github.com/dkruces/bcc.git
+blkalgn_src: "{{ ansible_user_dir }}/src/bcc/git"
+blkalgn_version: lbs
+
+# Install
+blkalgn_destdir: /usr/local/bin

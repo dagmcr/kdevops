@@ -1,0 +1,24 @@
+---
+# Build Dependencies
+postgresql_bdepends:
+  - bison
+  - build-essential
+  - flex
+  - libicu-dev
+  - libreadline-dev
+  - pkgconf
+  - sysbench
+  - zlib1g-dev
+
+# Fetch
+postgresql_repo: https://git.postgresql.org/git/postgresql.git
+postgresql_src: src/postgresql/git
+postgresql_version: REL_16_3
+
+# Configuration
+# Set the block size in kilobytes
+# https://www.postgresql.org/docs/16/install-make.html#CONFIGURE-OPTION-WITH-BLOCKSIZE
+postgresql_blocksize: 8
+# Set the WAL blok size in kilobytes
+# https://www.postgresql.org/docs/16/install-make.html#CONFIGURE-OPTION-WITH-WAL-BLOCKSIZE
+postgresql_wal_blocksize: 8

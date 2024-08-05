@@ -1,0 +1,599 @@
+---
+- name: rdepends
+  import_tasks: debian/rdepends.yml
+  when: ansible_facts['os_family']|lower == 'debian'
+
+- name: Create Benchmark User
+  ansible.builtin.user:
+    name: "{{ postgresql_sysbench_user }}"
+
+- name: Ensure the Logs Directory Exists
+  become: yes
+  become_method: sudo
+  file:
+    path: "{{ postgresql_sysbench_logdir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Check Log Directory is Mounted
+  become: yes
+  become_method: sudo
+  ansible.builtin.shell: |
+    mount | grep --quiet {{ postgresql_sysbench_logdir }}
+  register: _postgresql_sysbench_logdir_is_mounted
+  ignore_errors: true
+
+- name: Check if PostgreSQL Server is Running
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.stat:
+    path: "{{ postgresql_sysbench_pgdata }}/postmaster.pid"
+  register: postgresql_sysbench_stop
+
+- name: Stop the PostgreSQL Server
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/pg_ctl
+    --pgdata={{ postgresql_sysbench_pgdata }}
+    --log={{ postgresql_sysbench_pgctl_log }}
+    stop
+    --mode=immediate
+  retries: 5
+  delay: 10
+  when: postgresql_sysbench_stop.stat.exists | bool
+
+- name: Gracefully Shutdown the blkalgn Process
+  become: yes
+  become_user: root
+  ansible.builtin.shell: |
+    kill -SIGTERM $(cat /tmp/blkalgn.pid)
+  args:
+    executable: /bin/bash
+  when: _postgresql_sysbench_logdir_is_mounted.rc == 0
+
+- name: Unmount the Log Directory if Mounted
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    umount --force {{ postgresql_sysbench_logdir }}
+  when: _postgresql_sysbench_logdir_is_mounted.rc == 0
+
+- name: Mount tmpfs on Log Directory
+  become: yes
+  become_method: sudo
+  mount:
+    path: "{{ postgresql_sysbench_logdir }}"
+    src: tmpfs
+    fstype: tmpfs
+    opts: size=1G
+    state: ephemeral
+
+- name: Change Ownership of Log Directory
+  become: yes
+  become_method: sudo
+  ansible.builtin.file:
+    path: "{{ postgresql_sysbench_logdir }}"
+    owner: "{{ postgresql_sysbench_user }}"
+    group: "{{ postgresql_sysbench_user }}"
+    recurse: yes
+
+- name: Check if DUT is Mounted
+  become: yes
+  become_method: sudo
+  ansible.builtin.shell: |
+    mount | grep --quiet {{ postgresql_sysbench_device }}
+  register: _postgresql_sysbench_dut_is_mounted
+  ignore_errors: true
+
+- name: Unmount the DUT
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    umount --force {{ postgresql_sysbench_device }}
+  when: _postgresql_sysbench_dut_is_mounted.rc == 0
+
+- name: Create Mount Directory for PostgreSQL Service
+  become: yes
+  become_method: sudo
+  ansible.builtin.file:
+    path: "{{ postgresql_sysbench_mount }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Format DUT with XFS Filesystem
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    mkfs.xfs
+    -b size={{ postgresql_sysbench_xfs_blocksize }}
+    {{ postgresql_sysbench_device }}
+    -f
+  when: postgresql_sysbench_filesystem == 'xfs'
+
+- name: Format DUT with EXT4 Filesystem
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    mkfs.ext4
+    -b {{ postgresql_sysbench_ext4_blocksize }}
+    {{ postgresql_sysbench_device }}
+    -F
+  when: postgresql_sysbench_filesystem == 'ext4'
+
+- name: Format DUT with EXT4 Filesystem and Bigalloc
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    mkfs.ext4
+    -b {{ postgresql_sysbench_ext4ba_blocksize }}
+    -C {{ postgresql_sysbench_ext4ba_clustersize }}
+    -O bigalloc
+    {{ postgresql_sysbench_device }}
+    -F
+  when: postgresql_sysbench_filesystem == 'ext4ba'
+
+- name: Mount the DUT
+  become: yes
+  become_method: sudo
+  ansible.builtin.mount:
+    path: "{{ postgresql_sysbench_mount }}"
+    src: "{{ postgresql_sysbench_device }}"
+    fstype: "{{ postgresql_sysbench_filesystem | regex_replace('ba$', '') }}"
+    state: ephemeral
+
+- name: Change Ownership of DUT Mount Directory
+  become: yes
+  become_method: sudo
+  ansible.builtin.file:
+    path: "{{ postgresql_sysbench_mount }}"
+    owner: "{{ postgresql_sysbench_user }}"
+    group: "{{ postgresql_sysbench_user }}"
+    recurse: yes
+
+- name: Initialize the PostgreSQL Database
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/initdb
+    --pgdata={{ postgresql_sysbench_pgdata }}
+
+- name: Generate PostgreSQL Configuration File
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.template:
+    src: "{{ postgresql_sysbench_conf_template }}"
+    dest: "{{ postgresql_sysbench_pgdata }}/postgresql.conf"
+    mode: "0644"
+
+- name: Start the PostgreSQL Server
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/pg_ctl
+    --pgdata={{ postgresql_sysbench_pgdata }}
+    --log={{ postgresql_sysbench_pgctl_log }}
+    start
+
+- name: Create PostgreSQL Database USER
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/psql
+    --command="CREATE USER sbtest WITH PASSWORD 'password';"
+
+- name: Create PostgreSQL Database DATABASE
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/psql
+    --command="CREATE DATABASE sbtest;"
+
+- name: Grant USER Privileges to DATABASE
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/psql
+    --command="GRANT ALL PRIVILEGES ON DATABASE sbtest TO sbtest;"
+
+- name: Grant ALL public Privileges to DATABASE
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/psql
+    --host=localhost
+    --port=5432
+    --dbname=sbtest
+    --username=postgres
+    --no-password
+    --command="GRANT ALL ON SCHEMA public TO sbtest;"
+
+- name: Test and Ensure Permissions are Set Correctly
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/psql
+    --host=localhost
+    --port=5432
+    --dbname=sbtest
+    --username=sbtest
+    --no-password
+    --command="create table xyz(a varchar(100));"
+
+- name: Get Number of Processing Units Available
+  ansible.builtin.command: nproc --all
+  register: punits
+  when: postgresql_sysbench_threads == 'nproc'
+
+- name: Set Threads Using nproc Output
+  ansible.builtin.set_fact:
+    _postgresql_sysbench_threads: "{{ punits.stdout }}"
+  when: postgresql_sysbench_threads == 'nproc'
+
+- name: Set Threads Using Extra Vars
+  ansible.builtin.set_fact:
+    _postgresql_sysbench_threads: "{{ postgresql_sysbench_threads }}"
+  when: postgresql_sysbench_threads != 'nproc'
+
+- name: Start SysBench Prepare
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    sysbench
+    --db-driver=pgsql
+    --table-size={{ postgresql_sysbench_table_size }}
+    --tables={{ postgresql_sysbench_tables }}
+    --threads={{ _postgresql_sysbench_threads }}
+    --pgsql-host=127.0.0.1
+    --pgsql-port=5432
+    --pgsql-user=sbtest
+    --pgsql-password=password
+    --pgsql-db=sbtest
+    --db-debug
+    --verbosity=5
+    /usr/share/sysbench/oltp_read_write.lua prepare
+  register: postgresql_sysbench_prepare_output
+
+- name: Write SysBench Prepare Output to Log File
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.copy:
+    content: "{{ postgresql_sysbench_prepare_output.stdout }}"
+    dest: "{{ postgresql_sysbench_prepare_log }}"
+
+- name: Start blkalgn
+  become: yes
+  become_user: root
+  ansible.builtin.shell: |
+    nohup blkalgn \
+    --disk {{ postgresql_sysbench_disk }} \
+    --ops Write \
+    --json-output {{ postgresql_sysbench_blkalgn_json }} \
+    --output {{ postgresql_sysbench_blkalgn_log }} &
+    echo $! > /tmp/blkalgn.pid
+  args:
+    executable: /bin/bash
+  register: postgresql_sysbench_blkalgn_output
+  when: postgresql_sysbench_blkalgn_enabled|bool
+
+- name: Start SysBench Run
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    sysbench
+    --db-driver=pgsql
+    --table-size={{ postgresql_sysbench_table_size }}
+    --tables={{ postgresql_sysbench_tables }}
+    --threads={{ _postgresql_sysbench_threads }}
+    --pgsql-host=127.0.0.1
+    --pgsql-port=5432
+    --pgsql-user=sbtest
+    --pgsql-password=password
+    --pgsql-db=sbtest
+    --debug=on
+    --db-debug
+    --verbosity=5
+    --time={{ postgresql_sysbench_time }}
+    --report-interval={{ postgresql_sysbench_report_interval }}
+    --histogram=on
+    /usr/share/sysbench/oltp_read_write.lua run
+  register: postgresql_sysbench_run_output
+
+- name: Stop the PostgreSQL Server (Smart Mode)
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/pg_ctl
+    --pgdata={{ postgresql_sysbench_pgdata }}
+    --log={{ postgresql_sysbench_pgctl_log }}
+    stop
+    --mode=smart
+    --timeout=300
+  register: _postgresql_sysbench_stop_smart
+  retries: 1
+  delay: 30
+  ignore_errors: yes
+
+- name: Stop the PostgreSQL Server (Fast Mode)
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/pg_ctl
+    --pgdata={{ postgresql_sysbench_pgdata }}
+    --log={{ postgresql_sysbench_pgctl_log }}
+    stop
+    --mode=fast
+  register: _postgresql_sysbench_stop_fast
+  retries: 1
+  delay: 10
+  when: _postgresql_sysbench_stop_smart.rc != 0
+  ignore_errors: yes
+
+- name: Stop the PostgreSQL Server (Immediate Mode)
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/pg_ctl
+    --pgdata={{ postgresql_sysbench_pgdata }}
+    --log={{ postgresql_sysbench_pgctl_log }}
+    stop
+    --mode=immediate
+  register: _postgresql_sysbench_stop_immediate
+  retries: 1
+  delay: 10
+  when: _postgresql_sysbench_stop_fast.rc | default(0) != 0
+
+- name: Collect PostgreSQL Database Cluster Control Information
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.command: >
+    /usr/local/pgsql/bin/pg_controldata
+    --pgdata={{ postgresql_sysbench_pgdata }}
+  register: postgresql_sysbench_controldata_output
+
+- name: Check if DUT is Mounted
+  become: yes
+  become_method: sudo
+  ansible.builtin.shell: |
+    mount | grep --quiet {{ postgresql_sysbench_device }}
+  register: _postgresql_sysbench_dut_is_mounted
+  ignore_errors: true
+
+- name: Unmount the DUT
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    umount --force {{ postgresql_sysbench_device }}
+  when: _postgresql_sysbench_dut_is_mounted.rc == 0
+
+- name: Gracefully Shutdown the blkalgn Process
+  become: yes
+  become_user: root
+  ansible.builtin.shell: |
+    kill -SIGTERM $(cat /tmp/blkalgn.pid)
+  args:
+    executable: /bin/bash
+  when: postgresql_sysbench_blkalgn_enabled|bool
+
+- name: Write SysBench Run Output to Log File
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.copy:
+    content: "{{ postgresql_sysbench_run_output.stdout }}"
+    dest: "{{ postgresql_sysbench_run_log }}"
+
+- name: Write PostgreSQL Database Cluster Control Information to Log File
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.copy:
+    content: "{{ postgresql_sysbench_controldata_output.stdout }}"
+    dest: "{{ postgresql_sysbench_controldata_log }}"
+    mode: '0755'
+    owner: "{{ postgresql_sysbench_user }}"
+    group: "{{ postgresql_sysbench_user }}"
+    remote_src: yes
+
+- name: Ensure the localhost Output Directory Exists
+  ansible.builtin.file:
+    path: "{{ postgresql_sysbench_localhost_output }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+
+- name: Fetch SysBench Prepare Log File
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.fetch:
+    src: "{{ postgresql_sysbench_prepare_log }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_prepare_log_filename }}"
+    flat: yes
+
+- name: Fetch SysBench Run Log File
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.fetch:
+    src: "{{ postgresql_sysbench_run_log }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_run_log_filename }}"
+    flat: yes
+
+- name: Fetch blkalgn Log File
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.fetch:
+    src: "{{ postgresql_sysbench_blkalgn_log }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_blkalgn_log_filename }}"
+    flat: yes
+  when: postgresql_sysbench_blkalgn_enabled|bool
+
+- name: Fetch blkalgn JSON File
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.fetch:
+    src: "{{ postgresql_sysbench_blkalgn_json }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_blkalgn_json_filename }}"
+    flat: yes
+  when: postgresql_sysbench_blkalgn_enabled|bool
+
+- name: Fetch PostgreSQL Service Log File
+  become: yes
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.fetch:
+    src: "{{ postgresql_sysbench_pgctl_log }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_pgctl_log_filename }}"
+    flat: yes
+
+- name: Collect NVMe Namespace Logs
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.command: >
+    nvme id-ns {{ postgresql_sysbench_device }}
+  register: postgresql_sysbench_nvme_id_ns_output
+
+- name: Write NVMe Namespace Output to Log File
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.copy:
+    content: "{{ postgresql_sysbench_nvme_id_ns_output.stdout }}"
+    dest: "{{ postgresql_sysbench_nvme_id_ns_log }}"
+    mode: '0755'
+    owner: "{{ postgresql_sysbench_user }}"
+    group: "{{ postgresql_sysbench_user }}"
+    remote_src: yes
+
+- name: Fetch NVMe Namespace Log File
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.fetch:
+    src: "{{ postgresql_sysbench_nvme_id_ns_log }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_nvme_id_ns_log_filename }}"
+    flat: yes
+
+- name: Collect NVMe Controller Logs
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.command: >
+    nvme id-ctrl {{ postgresql_sysbench_device }}
+  register: postgresql_sysbench_nvme_id_ctrl_output
+
+- name: Write NVMe Controller Output to Log File
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.copy:
+    content: "{{ postgresql_sysbench_nvme_id_ctrl_output.stdout }}"
+    dest: "{{ postgresql_sysbench_nvme_id_ctrl_log }}"
+    mode: '0755'
+    owner: "{{ postgresql_sysbench_user }}"
+    group: "{{ postgresql_sysbench_user }}"
+    remote_src: yes
+
+- name: Fetch NVMe Controller Log File
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.fetch:
+    src: "{{ postgresql_sysbench_nvme_id_ctrl_log }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_nvme_id_ctrl_log_filename }}"
+    flat: yes
+
+- name: Collect XFS Filesystem Geometry Information of DUT
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.command: >
+    xfs_info {{ postgresql_sysbench_device }}
+  when: postgresql_sysbench_filesystem == 'xfs'
+  register: postgresql_sysbench_xfs_info_output
+
+- name: Write XFS filesystem Geometry Information Output of DUT to Log File
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.copy:
+    content: "{{ postgresql_sysbench_xfs_info_output.stdout }}"
+    dest: "{{ postgresql_sysbench_xfs_info_log }}"
+    mode: '0755'
+    owner: "{{ postgresql_sysbench_user }}"
+    group: "{{ postgresql_sysbench_user }}"
+    remote_src: yes
+  when: postgresql_sysbench_filesystem == 'xfs'
+
+- name: Fetch XFS info Log File
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.fetch:
+    src: "{{ postgresql_sysbench_xfs_info_log }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_xfs_info_log_filename }}"
+    flat: yes
+  when: postgresql_sysbench_filesystem == 'xfs'
+
+- name: Collect EXT4 Filesystem Geometry Information of Device
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.command: >
+    tune2fs -l {{ postgresql_sysbench_device }}
+  when: postgresql_sysbench_filesystem in ['ext4', 'ext4ba']
+  register: postgresql_sysbench_ext4_info_output
+
+- name: Write EXT4 filesystem Geometry Information Output of DUT to Log File
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.copy:
+    content: "{{ postgresql_sysbench_ext4_info_output.stdout }}"
+    dest: "{{ postgresql_sysbench_ext4_info_log }}"
+    mode: '0755'
+    owner: "{{ postgresql_sysbench_user }}"
+    group: "{{ postgresql_sysbench_user }}"
+    remote_src: yes
+  when: postgresql_sysbench_filesystem in ['ext4', 'ext4ba']
+
+- name: Fetch EXT4 info Log File
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.fetch:
+    src: "{{ postgresql_sysbench_ext4_info_log }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_ext4_info_log_filename }}"
+    flat: yes
+  when: postgresql_sysbench_filesystem in ['ext4', 'ext4ba']
+
+- name: Fetch PostgreSQL Database Cluster Control Information Log File
+  become: yes
+  become_method: sudo
+  become_user: "{{ postgresql_sysbench_user }}"
+  ansible.builtin.fetch:
+    src: "{{ postgresql_sysbench_controldata_log }}"
+    dest: "{{ postgresql_sysbench_localhost_output }}/{{ postgresql_sysbench_controldata_log_filename }}"
+    flat: yes
+
+- name: Check Log Directory is Mounted
+  become: yes
+  become_method: sudo
+  ansible.builtin.shell: |
+    mount | grep --quiet {{ postgresql_sysbench_logdir }}
+  register: _postgresql_sysbench_logdir_is_mounted
+  ignore_errors: true
+
+- name: Unmount the Log Directory if Mounted
+  become: yes
+  become_method: sudo
+  ansible.builtin.command: >
+    umount --force {{ postgresql_sysbench_logdir }}
+  when: _postgresql_sysbench_logdir_is_mounted.rc == 0

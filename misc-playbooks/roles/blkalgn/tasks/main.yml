@@ -1,0 +1,26 @@
+---
+- name: bdepends
+  import_tasks: debian/bdepends.yml
+  when: ansible_facts['os_family']|lower == 'debian'
+
+- name: Fetch Sources
+  ansible.builtin.git:
+    dest: "{{ blkalgn_src }}"
+    repo: "{{ blkalgn_repo }}"
+    update: yes
+    version: "{{ blkalgn_version }}"
+  delay: 5
+  register: result
+  retries: 3
+  until: not result.failed
+
+- name: Copy blkalgn to {{ blkalgn_destdir }}
+  become: yes
+  become_method: sudo
+  ansible.builtin.copy:
+    src: "{{ blkalgn_src }}/tools/blkalgn.py"
+    dest: "{{ blkalgn_destdir }}/blkalgn"
+    mode: '0755'
+    owner: root
+    group: root
+    remote_src: yes

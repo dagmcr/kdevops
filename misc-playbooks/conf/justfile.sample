@@ -1,0 +1,31 @@
+default:
+    just --list
+
+demo *host="localhost":
+    ansible-playbook \
+        --inventory inventory/{{ host }}.ini \
+        --extra-vars=@./vars/extra.yml \
+        -vvv \
+        ../demo.yml
+
+postgresql *host="localhost":
+    ansible-playbook \
+        --inventory inventory/{{ host }}.ini \
+        --extra-vars=@./vars/extra.yml \
+        -vvv \
+        ../postgresql.yml
+
+postgresql-sysbench *host="localhost":
+    ansible-playbook \
+        --inventory inventory/{{ host }}.ini \
+        --extra-vars=@./vars/extra.yml \
+        -vvv \
+        ../postgresql-sysbench.yml
+
+blkalgn *host="localhost":
+    ansible-playbook \
+        --inventory inventory/{{ host }}.ini \
+        --extra-vars=@./vars/extra.yml \
+        --ask-become-pass \
+        -vvv \
+        ../blkalgn.yml

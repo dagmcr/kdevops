@@ -1,0 +1,7 @@
+Host localvm
+    HostName localhost
+    User user
+    Port 22
+    StrictHostKeyChecking no
+    UserKnownHostsFile=/dev/null
+    ForwardAgent yes

@@ -1,0 +1,7 @@
+- name: Provisioning Build Dependencies
+  become: yes
+  become_method: sudo
+  become_user: root
+  ansible.builtin.apt:
+    name: "{{ postgresql_bdepends }}"
+    update_cache: yes

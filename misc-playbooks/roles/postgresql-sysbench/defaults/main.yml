@@ -1,0 +1,97 @@
+---
+# Runtime Dependencies
+# acl - Required for running Ansible with unpriviledge user (postgresql_sysbench_user)
+# https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_privilege_escalation.html#risks-of-becoming-an-unprivileged-user
+postgresql_sysbench_rdepends:
+  - acl
+
+# Benchmark User
+postgresql_sysbench_user: postgres
+
+# PostgreSQL Template Configuration Filename
+postgresql_sysbench_conf_template: postgresql.conf.sample
+
+# Mount Directory
+postgresql_sysbench_mount: /mnt/postgresql_sysbench
+
+# PostgreSQL Device
+postgresql_sysbench_disk: nvme0n1
+postgresql_sysbench_device: "/dev/{{ postgresql_sysbench_disk }}"
+
+# Common Log Directory
+postgresql_sysbench_logdir: /mnt/logs
+
+# PostgreSQL Filesystem
+# Options: xfs, ext4, ext4ba
+postgresql_sysbench_filesystem: xfs
+
+# PostgreSQL XFS Blocksize
+# The filesystem block size in bytes (-b block_size_options)
+# https://man7.org/linux/man-pages/man8/mkfs.xfs.8.html
+postgresql_sysbench_xfs_blocksize: 4096
+
+postgresql_sysbench_ext4_blocksize: 4096
+
+postgresql_sysbench_ext4ba_blocksize: 4096
+postgresql_sysbench_ext4ba_clustersize: 16384
+
+# PostgreSQL Database Cluster Directory
+# https://www.postgresql.org/docs/current/app-initdb.html#APP-INITDB-OPTION-PGDATA
+postgresql_sysbench_pgdata: "{{ postgresql_sysbench_mount }}/postgresql"
+
+# PostgreSQL Server Log Output
+# https://www.postgresql.org/docs/current/app-pg-ctl.html
+postgresql_sysbench_pgctl_log_filename: "logfile"
+postgresql_sysbench_pgctl_log: "{{ postgresql_sysbench_logdir }}/{{ postgresql_sysbench_pgctl_log_filename }}"
+
+# SysBench
+# Table Size (--table-size=)
+postgresql_sysbench_table_size: 100
+postgresql_sysbench_tables: 8
+# Report Interval in Seconds (--report-interval=)
+postgresql_sysbench_report_interval: 2
+# Benchmark Time in Seconds (--time=)
+postgresql_sysbench_time: 30
+# threads
+# nproc - Use output of nproc --all
+# integer - Use specific integer value (e.g. 512)
+postgresql_sysbench_threads: nproc
+
+# blkalgn
+postgresql_sysbench_blkalgn_log_filename: "blkalgn-{{ postgresql_sysbench_disk }}.log"
+postgresql_sysbench_blkalgn_log: "{{ postgresql_sysbench_logdir }}/{{ postgresql_sysbench_blkalgn_log_filename }}"
+postgresql_sysbench_blkalgn_json_filename: "blkalgn-{{ postgresql_sysbench_disk }}.json"
+postgresql_sysbench_blkalgn_json: "{{ postgresql_sysbench_logdir }}/{{ postgresql_sysbench_blkalgn_json_filename }}"
+postgresql_sysbench_blkalgn_enabled: true
+
+# SysBench Prepare Log File
+postgresql_sysbench_prepare_log_filename: sysbench_prepare.log
+postgresql_sysbench_prepare_log: "{{ postgresql_sysbench_logdir }}/{{ postgresql_sysbench_prepare_log_filename }}"
+
+# SysBench Run Log File
+postgresql_sysbench_run_log_filename: sysbench_run.log
+postgresql_sysbench_run_log: "{{ postgresql_sysbench_logdir }}/{{ postgresql_sysbench_run_log_filename }}"
+
+# nvme-cli
+# Identify Namespace Log File
+postgresql_sysbench_nvme_id_ns_log_filename: "{{ postgresql_sysbench_disk }}-id-ns.log"
+postgresql_sysbench_nvme_id_ns_log: "{{ postgresql_sysbench_logdir }}/{{ postgresql_sysbench_nvme_id_ns_log_filename }}"
+# Identify Controller Log File
+postgresql_sysbench_nvme_id_ctrl_log_filename: "{{ postgresql_sysbench_disk }}-id-ctrl.log"
+postgresql_sysbench_nvme_id_ctrl_log: "{{ postgresql_sysbench_logdir }}/{{ postgresql_sysbench_nvme_id_ctrl_log_filename }}"
+
+# XFS
+postgresql_sysbench_xfs_info_log_filename: "{{ postgresql_sysbench_disk }}-xfs_info.log"
+postgresql_sysbench_xfs_info_log: "{{ postgresql_sysbench_logdir }}/{{ postgresql_sysbench_xfs_info_log_filename }}"
+
+# EXT4
+postgresql_sysbench_ext4_info_log_filename: "{{ postgresql_sysbench_disk }}-ext4_info.log"
+postgresql_sysbench_ext4_info_log: "{{ postgresql_sysbench_logdir }}/{{ postgresql_sysbench_ext4_info_log_filename }}"
+
+# pg_controldata
+# https://www.postgresql.org/docs/current/app-pgcontroldata.html
+postgresql_sysbench_controldata_log_filename: controldata.log
+postgresql_sysbench_controldata_log: "{{ postgresql_sysbench_logdir }}/{{ postgresql_sysbench_controldata_log_filename }}"
+
+# Output Directory Where Fetched Files are Collected
+postgresql_sysbench_localhost_output: "{{ playbook_dir }}/../output"
