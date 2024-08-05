@@ -39,6 +39,10 @@ postgresql_sysbench_ext4ba_clustersize: 16384
 # https://www.postgresql.org/docs/current/app-initdb.html#APP-INITDB-OPTION-PGDATA
 postgresql_sysbench_pgdata: "{{ postgresql_sysbench_mount }}/postgresql"
 
+# PostgreSQL server Stop Timeout
+# Smart Mode Stop Timeout
+postgresql_sysbench_stop_smart_timeout: 300
+
 # PostgreSQL Server Log Output
 # https://www.postgresql.org/docs/current/app-pg-ctl.html
 postgresql_sysbench_pgctl_log_filename: "logfile"
