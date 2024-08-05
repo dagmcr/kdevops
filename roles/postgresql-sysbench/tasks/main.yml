@@ -314,7 +314,7 @@
     --log={{ postgresql_sysbench_pgctl_log }}
     stop
     --mode=smart
-    --timeout=300
+    --timeout={{ postgresql_sysbench_stop_smart_timeout }}
   register: _postgresql_sysbench_stop_smart
   retries: 1
   delay: 30
